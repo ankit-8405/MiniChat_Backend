@@ -1,85 +1,100 @@
-// OTP Service - Console-based for testing, Twilio for production
+// OTP Service - SMS via Twilio
 
 const crypto = require('node:crypto');
-const twilio = require('twilio');
+
+let twilioClient = null;
+
+// ─── Twilio (SMS) ─────────────────────────────────────────────────────────────
+try {
+  const twilio = require('twilio');
+  if (
+    process.env.TWILIO_ACCOUNT_SID &&
+    process.env.TWILIO_AUTH_TOKEN &&
+    process.env.TWILIO_ACCOUNT_SID.startsWith('AC')
+  ) {
+    twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+    console.log('✅ Twilio SMS client initialized');
+  } else {
+    console.warn('⚠️  Twilio credentials missing or invalid in .env');
+  }
+} catch (e) {
+  console.warn('⚠️  Twilio not available:', e.message);
+}
+
+const isDev = process.env.NODE_ENV !== 'production';
 
 class OTPService {
-  twilioClient = null;
-
-  constructor() {
-    if (process.env.TWILIO_ACCOUNT_SID && 
-        process.env.TWILIO_AUTH_TOKEN && 
-        process.env.TWILIO_ACCOUNT_SID.startsWith('AC') && 
-        process.env.TWILIO_ACCOUNT_SID !== 'your_twilio_account_sid') {
-      this.twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
-    }
-  }
-
-  // Generate 6-digit OTP
+  // ─── Generate 6-digit OTP ────────────────────────────────────────────────────
   generateOTP() {
-    // Use crypto.randomBytes for secure random generation
     const buffer = crypto.randomBytes(4);
     const random = buffer.readUInt32BE(0);
-    return (random % 900000 + 100000).toString(); // Ensures 6 digits
+    return (random % 900000 + 100000).toString();
   }
 
-  // Send OTP via SMS (Twilio) or console
-  async sendOTP(mobile, email, otp) {
-    try {
-      if (mobile && this.twilioClient && process.env.TWILIO_PHONE_NUMBER) {
-        // Send SMS via Twilio
-        await this.twilioClient.messages.create({
-          body: `Your OTP is: ${otp}. Valid for 10 minutes.`,
-          from: process.env.TWILIO_PHONE_NUMBER,
-          to: mobile
-        });
-        console.log(`✅ OTP sent to ${mobile} via SMS`);
-        return { success: true, message: 'OTP sent via SMS' };
-      } else {
-        // Fallback to console
-        console.log('\n========================================');
-        console.log('🔐 OTP GENERATED');
-        console.log('========================================');
-        if (mobile) {
-          console.log(`📱 Mobile: ${mobile}`);
-        }
-        if (email) {
-          console.log(`📧 Email: ${email}`);
-        }
-        console.log(`🔢 OTP: ${otp}`);
-        console.log(`⏰ Valid for: 10 minutes`);
-        console.log('========================================\n');
-        return { success: true, message: 'OTP logged to console' };
+  // ─── Get OTP expiry time (10 minutes from now) ────────────────────────────
+  getOTPExpiry() {
+    return new Date(Date.now() + 10 * 60 * 1000);
+  }
+
+  // ─── Send OTP via Twilio SMS ──────────────────────────────────────────────
+  async sendOTP(mobile, otp) {
+    const toNumber = mobile.startsWith('+') ? mobile : `+91${mobile}`;
+
+    if (!twilioClient || !process.env.TWILIO_PHONE_NUMBER) {
+      // No Twilio configured — dev console fallback only
+      if (isDev) {
+        console.log('\n' + '='.repeat(50));
+        console.log('🔐  OTP (Console Mode — Twilio not configured)');
+        console.log(`📱 Mobile : ${toNumber}`);
+        console.log(`🔢 OTP    : ${otp}`);
+        console.log('='.repeat(50) + '\n');
+        return { success: true, devOTP: otp };
       }
-    } catch (error) {
-      console.error('Error sending OTP:', error);
-      return { success: false, message: 'Failed to send OTP' };
+      throw new Error('SMS service is not configured');
+    }
+
+    try {
+      await twilioClient.messages.create({
+        body: `MiniChat: Your OTP is ${otp}. Valid for 10 minutes. Do not share with anyone.`,
+        from: process.env.TWILIO_PHONE_NUMBER,
+        to: toNumber
+      });
+      console.log(`✅ OTP SMS sent to ${toNumber}`);
+      return { success: true, message: 'OTP sent via SMS' };
+    } catch (err) {
+      console.error(`❌ Twilio SMS failed for ${toNumber}:`, err.message);
+
+      // In dev — fall back to console so testing is never blocked
+      if (isDev) {
+        console.log('\n' + '='.repeat(50));
+        console.log('🔐  OTP (Dev fallback — Twilio error)');
+        console.log(`📱 Mobile : ${toNumber}`);
+        console.log(`🔢 OTP    : ${otp}`);
+        console.log(`⚠️  Reason : ${err.message}`);
+        console.log('='.repeat(50) + '\n');
+        return { success: true, devOTP: otp };
+      }
+
+      // In production — surface a user-friendly error
+      if (err.code === 21608) {
+        throw new Error('This number is not verified with our SMS provider. Please contact support.');
+      }
+      throw new Error('Failed to send OTP via SMS. Please try again.');
     }
   }
 
-  // Verify OTP
+  // ─── Verify OTP ───────────────────────────────────────────────────────────
   verifyOTP(userOTP, storedOTP, otpExpiry) {
-    // Check if OTP exists
     if (!storedOTP || !otpExpiry) {
       return { valid: false, message: 'OTP not found. Please request a new OTP.' };
     }
-
-    // Check if OTP expired
-    if (new Date() > otpExpiry) {
+    if (new Date() > new Date(otpExpiry)) {
       return { valid: false, message: 'OTP has expired. Please request a new OTP.' };
     }
-
-    // Check if OTP matches
-    if (userOTP !== storedOTP) {
+    if (userOTP.toString().trim() !== storedOTP.toString().trim()) {
       return { valid: false, message: 'Invalid OTP. Please try again.' };
     }
-
     return { valid: true, message: 'OTP verified successfully' };
-  }
-
-  // Get OTP expiry time (10 minutes from now)
-  getOTPExpiry() {
-    return new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
   }
 }
 

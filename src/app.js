@@ -19,9 +19,8 @@ const errorHandler = require('./middleware/error');
 
 const app = express();
 
-// --- DEBUG / HEALTH / BASIC MIDDLEWARE ---
+// --- BASIC MIDDLEWARE ---
 app.set('trust proxy', 1);
-app.use(express.urlencoded({ extended: true, limit: '10kb' }));
 
 // simple request logger for debugging
 app.use((req, res, next) => {
@@ -33,7 +32,6 @@ app.use((req, res, next) => {
 app.get('/api/health', (req, res) => {
   res.json({ ok: true, env: process.env.NODE_ENV || 'unknown' });
 });
-// --- END DEBUG ---
 
 // Connect to database
 connectDB();
@@ -42,7 +40,41 @@ connectDB();
 app.use(helmet({
   crossOriginResourcePolicy: { policy: "cross-origin" }
 }));
-app.use(mongoSanitize());
+
+// CORS configuration - Allow all origins in development
+const corsOptions = {
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+
+    // Allow localhost on any port
+    if (origin.includes('localhost') || origin.includes('127.0.0.1')) {
+      return callback(null, true);
+    }
+
+    // Allow network IP access
+    if (origin.includes('192.168.') || origin.includes('10.') || origin.includes('172.')) {
+      return callback(null, true);
+    }
+
+    // Allow configured CLIENT_URL
+    if (origin === process.env.CLIENT_URL) {
+      return callback(null, true);
+    }
+
+    // In development, allow all
+    if (process.env.NODE_ENV === 'development') {
+      return callback(null, true);
+    }
+
+    callback(new Error('Not allowed by CORS'));
+  },
+  credentials: true,
+  optionsSuccessStatus: 200,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
+};
+app.use(cors(corsOptions));
 
 // Rate limiting - Relaxed for development
 const limiter = rateLimit({
@@ -56,44 +88,16 @@ app.use('/api/', limiter);
 // Auth rate limiting - Relaxed for development
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 50, // Increased from 5 to 50 for development
+  max: 50,
   message: 'Too many login attempts, please try again later.',
   skip: (req) => process.env.NODE_ENV === 'development' // Skip in development
 });
 app.use('/api/auth', authLimiter);
 
-// CORS configuration - Allow all origins in development
-const corsOptions = {
-  origin: function (origin, callback) {
-    // Allow requests with no origin (like mobile apps or curl requests)
-    if (!origin) return callback(null, true);
-    
-    // Allow localhost on any port
-    if (origin.includes('localhost') || origin.includes('127.0.0.1')) {
-      return callback(null, true);
-    }
-    
-    // Allow configured CLIENT_URL
-    if (origin === process.env.CLIENT_URL) {
-      return callback(null, true);
-    }
-    
-    // In development, allow all
-    if (process.env.NODE_ENV === 'development') {
-      return callback(null, true);
-    }
-    
-    callback(new Error('Not allowed by CORS'));
-  },
-  credentials: true,
-  optionsSuccessStatus: 200,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
-};
-app.use(cors(corsOptions));
-
-// Body parser with size limits
+// Body parsers (must come after CORS, before routes)
 app.use(express.json({ limit: '100kb' }));
+app.use(express.urlencoded({ extended: true, limit: '10kb' }));
+app.use(mongoSanitize());
 
 // Serve uploaded files
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));

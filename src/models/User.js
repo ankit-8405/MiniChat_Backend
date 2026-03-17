@@ -1,5 +1,4 @@
 const mongoose = require('mongoose');
-const bcrypt = require('bcryptjs');
 
 const userSchema = new mongoose.Schema({
   username: {
@@ -16,23 +15,17 @@ const userSchema = new mongoose.Schema({
     trim: true,
     minlength: 2,
     maxlength: 50,
-    default: function() {
+    default: function () {
       return this.username; // Default to username if not set
     }
   },
-  // Mobile or Email for OTP authentication
+  // Mobile for OTP authentication
   mobile: {
     type: String,
-    sparse: true, // Allows null but enforces uniqueness when present
+    required: true,
+    unique: true,
     trim: true,
     match: /^[0-9]{10}$/ // 10 digit mobile number
-  },
-  email: {
-    type: String,
-    sparse: true, // Allows null but enforces uniqueness when present
-    trim: true,
-    lowercase: true,
-    match: /^[^\s@]+@[^\s@]+\.[^\s@]+$/ // Basic email validation
   },
   // OTP fields
   otp: {
@@ -76,10 +69,9 @@ const userSchema = new mongoose.Schema({
   }
 });
 
-// Validate that user has either mobile or email
-userSchema.pre('save', function(next) {
-  if (!this.mobile && !this.email) {
-    return next(new Error('Either mobile or email is required'));
+userSchema.pre('save', function (next) {
+  if (!this.mobile) {
+    return next(new Error('Mobile number is required'));
   }
   next();
 });
